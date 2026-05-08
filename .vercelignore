@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vite/
+.vercel/
+.pnpm-store/
+.venv/
+output/
+.DS_Store
+npm-debug.log*
