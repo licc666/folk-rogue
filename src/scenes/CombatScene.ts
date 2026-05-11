@@ -68,7 +68,9 @@ export class CombatScene extends Phaser.Scene {
 
   private draw(): void {
     this.registry.set("suppressReveal", this.hasDrawnOnce);
-    this.children.removeAll(true);
+    this.children.list
+      .filter((child) => !child.getData?.("persistOnRedraw"))
+      .forEach((child) => child.destroy());
     createStageBackground(this, undefined, ENEMY_BACKGROUNDS[this.enemyId]);
     addStatsBar(this, this.run);
     addSmoke(this);
@@ -102,6 +104,7 @@ export class CombatScene extends Phaser.Scene {
     this.add.text(940, 502, `${enemy.name} · ${tierLabel}`, titleStyle(20)).setOrigin(0.5);
     this.drawHealthBar(805, 526, 270, 18, this.combat.enemy.life, this.combat.enemy.maxLife, COLORS.danger);
     this.add.text(940, 554, `护身 ${this.combat.enemy.block} · 意图 ${this.intentLabel(currentIntent(enemy, this.combat))}`, textStyle(16, COLORS.muted)).setOrigin(0.5);
+    this.drawActiveGod(610, 392);
 
     const omenTextKey = omenTextTexture(this.combat.omen.id);
     const omen = this.textures.exists(omenTextKey)
@@ -131,7 +134,6 @@ export class CombatScene extends Phaser.Scene {
     this.add.text(118, 606, `行动点 ${this.combat.actionPoints}`, titleStyle(24));
     this.add.text(118, 638, `牌堆 ${this.combat.drawPile.length} · 弃牌 ${this.combat.discardPile.length}`, textStyle(15, COLORS.muted));
     this.add.text(118, 664, `回合 ${this.combat.turn}`, textStyle(15, COLORS.muted));
-    this.drawActiveGod(205, 632);
     addButton(this, 1070, 640, 148, 52, "结束回合", () => this.endTurn(), { primary: true });
   }
 
@@ -189,16 +191,22 @@ export class CombatScene extends Phaser.Scene {
     const godId = this.run.gods[0];
     if (!godId) return;
     const god = godById(godId);
-    const bg = this.add.circle(x, y, 30, COLORS.surfaceStrong, 0.86).setStrokeStyle(2, COLORS.goldDark, 0.9);
+    const c = this.add.container(x, y).setDepth(28);
+    const bg = this.add
+      .rectangle(0, 0, 162, 194, COLORS.surface, 0.66)
+      .setStrokeStyle(2, COLORS.goldDark, 0.92);
+    const halo = this.add.circle(0, -40, 66, COLORS.gold, 0.14).setStrokeStyle(2, COLORS.gold, 0.36);
     const portrait = this.add
-      .image(x, y, textureOr(this, godTexture(godId), "icon-token"))
-      .setDisplaySize(42, 62)
-      .setAlpha(0.9);
-    reveal(this, bg, y + 12, y);
-    reveal(this, portrait, y + 12, y);
-    pulse(this, portrait, 1.025, 1900);
-    this.add.text(x + 40, y - 12, "所请", textStyle(13, COLORS.muted)).setOrigin(0, 0.5);
-    this.add.text(x + 40, y + 12, god.name, textStyle(17, COLORS.gold, { fontStyle: "bold" })).setOrigin(0, 0.5);
+      .image(0, -22, textureOr(this, godTexture(godId), "icon-token"))
+      .setDisplaySize(112, 154)
+      .setAlpha(0.98);
+    const namePlate = this.add.rectangle(0, 72, 132, 38, COLORS.black, 0.48).setStrokeStyle(1, COLORS.goldDark, 0.6);
+    const label = this.add.text(0, 58, "所请神明", textStyle(13, COLORS.muted, { align: "center" })).setOrigin(0.5);
+    const name = this.add.text(0, 80, god.name, textStyle(20, COLORS.gold, { align: "center", fontStyle: "bold" })).setOrigin(0.5);
+    c.add([bg, halo, portrait, namePlate, label, name]);
+    reveal(this, c, y + 18, y);
+    pulse(this, halo, 1.08, 1700);
+    pulse(this, portrait, 1.018, 2100);
   }
 
   private drawHealthBar(x: number, y: number, width: number, height: number, value: number, max: number, color: number): void {
@@ -220,7 +228,7 @@ export class CombatScene extends Phaser.Scene {
     this.showCardFeedback(result);
     clampRun(this.run);
     this.busy = true;
-    this.time.delayedCall(this.registry.get("reducedMotion") ? 80 : 320, () => {
+    this.time.delayedCall(this.feedbackDelay(), () => {
       this.checkOutcome();
       if (!this.scene.isActive("CombatScene")) return;
       this.busy = false;
@@ -234,12 +242,16 @@ export class CombatScene extends Phaser.Scene {
     enemyAct(this.run, this.combat);
     this.showEnemyFeedback();
     clampRun(this.run);
-    this.time.delayedCall(this.registry.get("reducedMotion") ? 80 : 360, () => {
+    this.time.delayedCall(this.feedbackDelay(), () => {
       this.checkOutcome();
       if (!this.scene.isActive("CombatScene")) return;
       this.busy = false;
       this.draw();
     });
+  }
+
+  private feedbackDelay(): number {
+    return this.registry.get("reducedMotion") ? 80 : 320;
   }
 
   private checkOutcome(): void {
@@ -292,19 +304,18 @@ export class CombatScene extends Phaser.Scene {
       flashAt(this, 940, 372, this.omenColor(), 120);
       particleBurst(this, 940, 360, this.fx("fuhuo", "particle-fuhuo"), { count: 9, color: this.omenColor(), spread: 82, rise: 72, ...this.fxFrameOptions("fuhuo", 3, 9) });
       if (this.enemySprite) shake(this, this.enemySprite);
-      if (result.damage > 0) impactText(this, 940, 306, `伤害 -${result.damage}`, COLORS.primaryStrong, { backplate: "damage", text: "damage", number: -result.damage, signed: true, tone: result.damage >= 12 ? "critical" : "damage" });
-      if (result.blockedDamage > 0) impactText(this, 940, 350, `破盾 -${result.blockedDamage}`, COLORS.gold, { backplate: "shield", text: "break-shield", number: -result.blockedDamage, signed: true, tone: "shield" });
+      this.showCardDamageText(result);
     }
     if (result.block > 0) {
       flashAt(this, 300, 370, COLORS.good, 90);
       particleBurst(this, 300, 360, this.fx("barrier", "particle-spirit"), { count: 6, color: COLORS.good, spread: 46, rise: 52, ...this.fxFrameOptions("barrier", 0, 5) });
-      impactText(this, 300, 314, `护身 +${result.block}`, COLORS.good, { backplate: "shield", text: "guard", number: result.block, signed: true, tone: "shield" });
+      impactText(this, 300, 314, `护身 +${result.block}`, COLORS.good, { text: "guard", number: result.block, signed: true, tone: "shield", persistOnRedraw: true });
     }
-    if (result.heal > 0) impactText(this, 300, 348, `命数 +${result.heal}`, COLORS.good, { backplate: "heal", text: "life", number: result.heal, signed: true, tone: "heal" });
-    if (result.divine > 0) impactText(this, 300, 382, `神力 +${result.divine}`, COLORS.spirit, { backplate: "spirit", text: "divine", number: result.divine, signed: true, tone: "spirit" });
-    if (result.luck > 0) impactText(this, 640, 240, `气运 +${result.luck}`, COLORS.gold, { backplate: "luck", text: "luck", number: result.luck, signed: true, tone: "luck" });
-    if (result.virtue !== 0) impactText(this, 640, 278, `阴德 ${result.virtue > 0 ? "+" : ""}${result.virtue}`, COLORS.gold, { backplate: "luck", text: "virtue", number: result.virtue, signed: true, tone: "luck" });
-    if (result.draw > 0) impactText(this, 640, 610, `抽牌 +${result.draw}`, COLORS.spirit, { backplate: "spirit", text: "draw-card", number: result.draw, signed: true, tone: "spirit" });
+    if (result.heal > 0) impactText(this, 300, 348, `命数 +${result.heal}`, COLORS.good, { text: "life", number: result.heal, signed: true, tone: "heal", persistOnRedraw: true });
+    if (result.divine > 0) impactText(this, 300, 382, `神力 +${result.divine}`, COLORS.spirit, { text: "divine", number: result.divine, signed: true, tone: "spirit", persistOnRedraw: true });
+    if (result.luck > 0) impactText(this, 640, 240, `气运 +${result.luck}`, COLORS.gold, { text: "luck", number: result.luck, signed: true, tone: "luck", persistOnRedraw: true });
+    if (result.virtue !== 0) impactText(this, 640, 278, `阴德 ${result.virtue > 0 ? "+" : ""}${result.virtue}`, COLORS.gold, { text: "virtue", number: result.virtue, signed: true, tone: "luck", persistOnRedraw: true });
+    if (result.draw > 0) impactText(this, 640, 610, `抽牌 +${result.draw}`, COLORS.spirit, { text: "draw-card", number: result.draw, signed: true, tone: "spirit", persistOnRedraw: true });
     if (!result.damage && !result.block && !result.heal && !result.divine && !result.luck && !result.virtue && !result.draw) {
       flashAt(this, 300, 370, COLORS.good, 90);
       impactText(this, 300, 314, "符成", COLORS.good, { text: "cast-success", tone: "heal", scale: 1.04 });
@@ -317,8 +328,7 @@ export class CombatScene extends Phaser.Scene {
       flashAt(this, 300, 370, COLORS.danger, 100);
       this.heroSprite?.setTexture(textureOr(this, "hero-hit", "hero"));
       if (this.heroSprite) shake(this, this.heroSprite);
-      const match = latest.match(/造成 (\d+) 伤害/);
-      impactText(this, 300, 314, match?.[1] ? `-${match[1]}` : "劫", COLORS.danger, match?.[1] ? { backplate: "damage", number: -Number(match[1]), signed: true, tone: "damage" } : { text: "calamity", tone: "damage", scale: 1.05 });
+      this.showEnemyDamageText(this.latestEnemyDamage());
       return;
     }
     flashAt(this, 940, 372, COLORS.gold, 90);
@@ -332,5 +342,42 @@ export class CombatScene extends Phaser.Scene {
 
   private fxFrameOptions(key: string, frameStart: number, frameEnd: number): { frameStart?: number; frameEnd?: number } {
     return this.textures.exists(fxTexture(key)) ? { frameStart, frameEnd } : {};
+  }
+
+  private showCardDamageText(result: CardPlayResult): void {
+    if (result.damage > 0) {
+      impactText(this, 940, 306, `伤害 -${result.damage}`, COLORS.primaryStrong, {
+        text: "damage",
+        number: -result.damage,
+        signed: true,
+        tone: result.damage >= 12 ? "critical" : "damage",
+        persistOnRedraw: true,
+      });
+    }
+    if (result.blockedDamage > 0) {
+      impactText(this, 940, 350, `破盾 -${result.blockedDamage}`, COLORS.gold, {
+        text: "break-shield",
+        number: -result.blockedDamage,
+        signed: true,
+        tone: "shield",
+        persistOnRedraw: true,
+      });
+    }
+  }
+
+  private showEnemyDamageText(damage: number): void {
+    if (damage <= 0) return;
+    impactText(this, 300, 314, `伤害 -${damage}`, COLORS.danger, {
+      text: "damage",
+      number: -damage,
+      signed: true,
+      tone: "damage",
+      persistOnRedraw: true,
+    });
+  }
+
+  private latestEnemyDamage(): number {
+    const match = (this.combat.log[0] ?? "").match(/造成 (\d+) 伤害/);
+    return match ? Number(match[1]) : 0;
   }
 }

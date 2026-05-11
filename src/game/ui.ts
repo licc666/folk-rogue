@@ -7,6 +7,8 @@ const MOTION = {
   press: 120,
   reveal: 220,
   feedback: 260,
+  impactHold: 700,
+  impactFade: 980,
   ambient: 2800,
 };
 
@@ -19,31 +21,17 @@ interface ImpactTextOptions {
   signed?: boolean;
   tone?: ImpactTextTone;
   scale?: number;
+  persistOnRedraw?: boolean;
 }
 
-const DIGIT_TEXTURES: Record<ImpactTextTone, string> = {
-  damage: "digits-damage-red",
-  critical: "digits-damage-critical",
-  shield: "digits-shield-gold",
-  heal: "digits-heal-green",
-  spirit: "digits-spirit-blue",
-  luck: "digits-luck-gold",
-  neutral: "digits-neutral-muted",
-};
-
-const DIGIT_FRAMES: Record<string, number> = {
-  "0": 0,
-  "1": 1,
-  "2": 2,
-  "3": 3,
-  "4": 4,
-  "5": 5,
-  "6": 6,
-  "7": 7,
-  "8": 8,
-  "9": 9,
-  "-": 10,
-  "+": 11,
+const IMPACT_NUMBER_COLORS: Record<ImpactTextTone, { fill: number; stroke: string }> = {
+  damage: { fill: COLORS.primaryStrong, stroke: "#5d130f" },
+  critical: { fill: COLORS.gold, stroke: "#7d1d12" },
+  shield: { fill: COLORS.gold, stroke: "#4b3515" },
+  heal: { fill: COLORS.good, stroke: "#173b2a" },
+  spirit: { fill: COLORS.spirit, stroke: "#11394b" },
+  luck: { fill: COLORS.gold, stroke: "#4b3515" },
+  neutral: { fill: COLORS.muted, stroke: "#252019" },
 };
 
 export function textStyle(size: number, color = COLORS.text, extra: Phaser.Types.GameObjects.Text.TextStyle = {}) {
@@ -335,21 +323,14 @@ export function impactText(
 ): void {
   if (options && impactArtText(scene, x, y, label, color, options)) return;
 
-  const text = scene.add.text(x, y, label, titleStyle(30)).setOrigin(0.5).setDepth(80);
+  const text = scene.add.text(x, y, label, titleStyle(26)).setOrigin(0.5).setDepth(80);
   text.setColor(`#${color.toString(16).padStart(6, "0")}`);
+  if (options?.persistOnRedraw) text.setData("persistOnRedraw", true);
   if (!canAnimate(scene)) {
-    scene.time.delayedCall(650, () => text.destroy());
+    scene.time.delayedCall(MOTION.impactHold + MOTION.impactFade, () => text.destroy());
     return;
   }
-  scene.tweens.add({
-    targets: text,
-    y: y - 54,
-    alpha: 0,
-    scale: 1.12,
-    duration: 760,
-    ease: "Cubic.easeOut",
-    onComplete: () => text.destroy(),
-  });
+  animateImpact(scene, text, y, () => text.destroy());
 }
 
 function impactArtText(
@@ -362,27 +343,39 @@ function impactArtText(
 ): boolean {
   const textKey = options.text ? combatTextTexture(`text-${options.text}`) : undefined;
   const backplateKey = options.backplate ? combatTextTexture(`pop-${options.backplate}-backplate`) : undefined;
-  const digitsKey = combatTextTexture(DIGIT_TEXTURES[options.tone ?? "neutral"]);
   const hasText = Boolean(textKey && scene.textures.exists(textKey));
   const hasBackplate = Boolean(backplateKey && scene.textures.exists(backplateKey));
-  const hasDigits = typeof options.number === "number" && scene.textures.exists(digitsKey);
+  const hasDigits = typeof options.number === "number";
 
   if (!hasText && !hasBackplate && !hasDigits) return false;
 
   const scale = options.scale ?? 1;
   const c = scene.add.container(x, y).setDepth(80);
-  if (hasBackplate && backplateKey) {
-    c.add(scene.add.image(0, 0, backplateKey).setDisplaySize(226 * scale, 112 * scale).setAlpha(0.96));
-  }
+  if (options.persistOnRedraw) c.setData("persistOnRedraw", true);
+  const row = scene.add.container(0, 0);
+  let rowWidth = 0;
   if (hasText && textKey) {
-    const textWidth = options.text === "calamity" || options.text === "charge" || options.text === "curse" ? 50 : 88;
-    c.add(scene.add.image(hasDigits ? -46 * scale : 0, -2 * scale, textKey).setDisplaySize(textWidth * scale, 44 * scale));
+    const textWidth = impactTextWidth(options.text) * scale;
+    const textHeight = impactTextHeight(options.text) * scale;
+    const textImage = scene.add.image(rowWidth, -2 * scale, textKey).setOrigin(0, 0.5).setDisplaySize(textWidth, textHeight);
+    row.add(textImage);
+    rowWidth += textWidth;
   }
   if (hasDigits && typeof options.number === "number") {
+    if (rowWidth > 0) rowWidth += 14 * scale;
     const numberText = formatImpactNumber(options.number, options.signed);
-    const digits = createDigitRun(scene, numberText, digitsKey, scale);
-    digits.setPosition(hasText ? 32 * scale : 0, 2 * scale);
-    c.add(digits);
+    const number = createImpactNumber(scene, numberText, options.tone ?? "neutral", scale);
+    number.container.setPosition(rowWidth, 1 * scale);
+    row.add(number.container);
+    rowWidth += number.width;
+  }
+
+  if (hasBackplate && backplateKey) {
+    c.add(scene.add.image(0, 0, backplateKey).setDisplaySize(Math.max(248 * scale, rowWidth + 80 * scale), 124 * scale).setAlpha(0.96));
+  }
+  if (rowWidth > 0) {
+    row.x = -rowWidth / 2;
+    c.add(row);
   }
 
   if (!hasText && !hasDigits) {
@@ -392,19 +385,22 @@ function impactArtText(
   }
 
   if (!canAnimate(scene)) {
-    scene.time.delayedCall(650, () => c.destroy());
+    scene.time.delayedCall(MOTION.impactHold + MOTION.impactFade, () => c.destroy());
     return true;
   }
-  scene.tweens.add({
-    targets: c,
-    y: y - 54,
-    alpha: 0,
-    scale: 1.12,
-    duration: 760,
-    ease: "Cubic.easeOut",
-    onComplete: () => c.destroy(),
-  });
+  animateImpact(scene, c, y, () => c.destroy());
   return true;
+}
+
+function impactTextWidth(text?: string): number {
+  if (text === "calamity" || text === "charge" || text === "curse") return 58;
+  if (text === "draw-card" || text === "break-shield" || text === "cast-success") return 108;
+  return 98;
+}
+
+function impactTextHeight(text?: string): number {
+  if (text === "calamity" || text === "charge" || text === "curse") return 58;
+  return 46;
 }
 
 function formatImpactNumber(value: number, signed?: boolean): string {
@@ -412,18 +408,43 @@ function formatImpactNumber(value: number, signed?: boolean): string {
   return value > 0 ? `+${value}` : `${value}`;
 }
 
-function createDigitRun(scene: Phaser.Scene, value: string, textureKey: string, scale: number): Phaser.GameObjects.Container {
-  const glyphs = [...value].filter((glyph) => typeof DIGIT_FRAMES[glyph] === "number");
-  const glyphWidth = 25 * scale;
-  const spacing = -2 * scale;
-  const totalWidth = glyphs.length * glyphWidth + Math.max(0, glyphs.length - 1) * spacing;
-  const c = scene.add.container(0, 0);
-  glyphs.forEach((glyph, index) => {
-    const digit = scene.add.image(index * (glyphWidth + spacing) - totalWidth / 2 + glyphWidth / 2, 0, textureKey, DIGIT_FRAMES[glyph]);
-    digit.setDisplaySize(glyphWidth, glyphWidth);
-    c.add(digit);
+function createImpactNumber(scene: Phaser.Scene, value: string, tone: ImpactTextTone, scale: number): { container: Phaser.GameObjects.Container; width: number } {
+  const palette = IMPACT_NUMBER_COLORS[tone];
+  const text = scene.add
+    .text(0, 0, value, titleStyle(Math.round(40 * scale)))
+    .setOrigin(0, 0.5)
+    .setColor(`#${palette.fill.toString(16).padStart(6, "0")}`)
+    .setStroke(palette.stroke, Math.max(3, Math.round(4 * scale)))
+    .setShadow(2 * scale, 3 * scale, "rgba(0,0,0,0.42)", 4 * scale, true, true);
+  const c = scene.add.container(0, 0, [text]);
+  c.setSize(text.width, text.height);
+  return { container: c, width: text.width };
+}
+
+function animateImpact(
+  scene: Phaser.Scene,
+  target: Phaser.GameObjects.GameObject,
+  y: number,
+  onComplete: () => void,
+): void {
+  const targetWithScale = target as Phaser.GameObjects.GameObject & { scale: number };
+  targetWithScale.scale = 0.94;
+  scene.tweens.add({
+    targets: target,
+    scale: 1,
+    duration: 140,
+    ease: "Back.easeOut",
   });
-  return c;
+  scene.tweens.add({
+    targets: target,
+    y: y - 46,
+    alpha: 0,
+    scale: 1.06,
+    delay: MOTION.impactHold,
+    duration: MOTION.impactFade,
+    ease: "Cubic.easeOut",
+    onComplete,
+  });
 }
 
 export function flashAt(
